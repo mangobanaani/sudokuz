@@ -2,8 +2,8 @@
 
 A modern, multi-size Sudoku game featuring 4×4, 6×6, and 16×16 grids. Perfect for all skill levels from beginners to experts.
 
-![SudokuZ Game](sudo1.png)
-![SudokuZ Mobile](sudo2.png)
+![SudokuZ Game](sudo1.jpg)
+![SudokuZ Mobile](sudo2.jpg)
 
 ![Sudoku Game](https://img.shields.io/badge/TypeScript-007ACC?style=flat&logo=typescript&logoColor=white)
 ![Next.js](https://img.shields.io/badge/Next.js-000000?style=flat&logo=next.js&logoColor=white)
