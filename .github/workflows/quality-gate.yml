@@ -1,0 +1,242 @@
+name: Quality Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      check_type:
+        description: 'Type of quality check to run'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - security
+          - performance
+          - accessibility
+          - dependencies
+      url:
+        description: 'URL to test (for live site audits)'
+        required: false
+        default: 'http://localhost:3000'
+        type: string
+
+jobs:
+  security-audit:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'full' || inputs.check_type == 'security' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: npm audit
+        run: |
+          echo "## Security Audit Results" >> $GITHUB_STEP_SUMMARY
+          npm audit --audit-level=moderate || echo "⚠️ Found security vulnerabilities" >> $GITHUB_STEP_SUMMARY
+
+      - name: Snyk security scan
+        uses: snyk/actions/node@master
+        continue-on-error: true
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+        with:
+          args: --severity-threshold=medium
+
+      - name: Upload Snyk results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: snyk-results
+          path: snyk.sarif
+          retention-days: 7
+
+  dependency-check:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'full' || inputs.check_type == 'dependencies' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Check for outdated packages
+        run: |
+          echo "## Dependency Status" >> $GITHUB_STEP_SUMMARY
+          npm outdated --long || echo "All packages are up to date" >> $GITHUB_STEP_SUMMARY
+
+      - name: License check
+        run: |
+          npx license-checker --summary >> $GITHUB_STEP_SUMMARY
+
+      - name: Bundle size analysis
+        run: |
+          npm run build
+          npx bundlesize
+          echo "📦 Bundle size check completed" >> $GITHUB_STEP_SUMMARY
+
+  performance-audit:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'full' || inputs.check_type == 'performance' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Build application
+        run: npm run build
+
+      - name: Start application
+        if: ${{ inputs.url == 'http://localhost:3000' }}
+        run: |
+          npm run start &
+          sleep 10
+
+      - name: Install Lighthouse CI
+        run: npm install -g @lhci/cli
+
+      - name: Run Lighthouse audit
+        run: |
+          lhci autorun --collect.url=${{ inputs.url }} \
+            --collect.numberOfRuns=3 \
+            --assert.preset=lighthouse:recommended \
+            --upload.target=temporary-public-storage
+
+      - name: Upload Lighthouse results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighthouse-results
+          path: |
+            .lighthouseci/
+          retention-days: 7
+
+  accessibility-audit:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'full' || inputs.check_type == 'accessibility' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci --prefer-offline --no-audit
+          npx playwright install --with-deps
+
+      - name: Build and start application
+        if: ${{ inputs.url == 'http://localhost:3000' }}
+        run: |
+          npm run build
+          npm run start &
+          sleep 10
+
+      - name: Run accessibility tests
+        run: |
+          npx playwright test --project=chromium --grep="accessibility"
+        env:
+          PLAYWRIGHT_TEST_BASE_URL: ${{ inputs.url }}
+
+      - name: Run axe accessibility scan
+        uses: chanzuckerberg/axe-action@v0.2.3
+        with:
+          url: ${{ inputs.url }}
+          output: 'axe-results.json'
+
+      - name: Upload accessibility results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: accessibility-results
+          path: axe-results.json
+          retention-days: 7
+
+  code-quality:
+    runs-on: ubuntu-latest
+    if: ${{ inputs.check_type == 'full' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Run ESLint with detailed output
+        run: |
+          npx eslint . --ext .ts,.tsx --format=compact > eslint-results.txt || true
+          echo "## Code Quality Results" >> $GITHUB_STEP_SUMMARY
+          echo "### ESLint Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat eslint-results.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: TypeScript strict check
+        run: |
+          npx tsc --noEmit --strict
+          echo "✅ TypeScript strict mode passed" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check file sizes
+        run: |
+          echo "### File Size Analysis" >> $GITHUB_STEP_SUMMARY
+          find src -name "*.ts" -o -name "*.tsx" | xargs wc -l | sort -n | tail -10 >> $GITHUB_STEP_SUMMARY
+
+      - name: Complexity analysis
+        run: |
+          npx complexity-report --format=json src/ > complexity-report.json || true
+          echo "📊 Complexity analysis completed" >> $GITHUB_STEP_SUMMARY
+
+  summary:
+    needs: [security-audit, dependency-check, performance-audit, accessibility-audit, code-quality]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Quality gate summary
+        run: |
+          echo "# 🏆 Quality Gate Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Results Overview" >> $GITHUB_STEP_SUMMARY
+          echo "- **Check Type**: ${{ inputs.check_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target URL**: ${{ inputs.url }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Timestamp**: $(date -u)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- Security Audit: ${{ needs.security-audit.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Dependency Check: ${{ needs.dependency-check.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Performance Audit: ${{ needs.performance-audit.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Accessibility Audit: ${{ needs.accessibility-audit.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Code Quality: ${{ needs.code-quality.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📁 Check the **Artifacts** section below for detailed reports."

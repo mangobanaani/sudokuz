@@ -1,0 +1,226 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+          - staging
+          - production
+      version:
+        description: 'Version tag or commit SHA'
+        required: false
+        default: 'latest'
+        type: string
+      skip_tests:
+        description: 'Skip pre-deployment tests'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  NODE_VERSION: '18'
+
+jobs:
+  pre-deploy-checks:
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version != 'latest' && inputs.version || github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test -- --watchAll=false
+
+      - name: Build
+        run: npm run build
+        env:
+          NODE_ENV: production
+
+  deploy-staging:
+    needs: pre-deploy-checks
+    if: ${{ inputs.environment == 'staging' && (success() || inputs.skip_tests) }}
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version != 'latest' && inputs.version || github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Build for staging
+        run: npm run build
+        env:
+          NODE_ENV: production
+          NEXT_PUBLIC_APP_ENV: staging
+
+      - name: Deploy to Vercel (Staging)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prebuilt'
+          alias-domains: |
+            sudokuz-staging.vercel.app
+
+      - name: Comment deployment URL
+        run: |
+          echo "🚀 **Staging Deployment Successful**" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: staging" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: https://sudokuz-staging.vercel.app" >> $GITHUB_STEP_SUMMARY
+
+  deploy-production:
+    needs: pre-deploy-checks
+    if: ${{ inputs.environment == 'production' && (success() || inputs.skip_tests) }}
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version != 'latest' && inputs.version || github.sha }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Build for production
+        run: npm run build
+        env:
+          NODE_ENV: production
+          NEXT_PUBLIC_APP_ENV: production
+
+      - name: Run smoke tests
+        run: |
+          npm run start &
+          sleep 10
+          curl -f http://localhost:3000 || exit 1
+
+      - name: Deploy to Vercel (Production)
+        uses: amondnet/vercel-action@v25
+        with:
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+          vercel-args: '--prod --prebuilt'
+
+      - name: Create GitHub Release
+        if: ${{ inputs.version != 'latest' }}
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ inputs.version }}
+          release_name: Release ${{ inputs.version }}
+          body: |
+            ## SudokuZ Release ${{ inputs.version }}
+            
+            Deployed to production: https://sudokuz.vercel.app
+            
+            ### Changes
+            - See commit history for detailed changes
+            
+            ### Deployment Info
+            - Environment: production
+            - Build: ${{ github.sha }}
+            - Deployed: ${{ github.event.head_commit.timestamp }}
+
+      - name: Comment deployment URL
+        run: |
+          echo "🎉 **Production Deployment Successful**" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: production" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: https://sudokuz.vercel.app" >> $GITHUB_STEP_SUMMARY
+
+  post-deploy-tests:
+    needs: [deploy-staging, deploy-production]
+    if: ${{ always() && (needs.deploy-staging.result == 'success' || needs.deploy-production.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci --prefer-offline --no-audit
+          npx playwright install --with-deps
+
+      - name: Determine test URL
+        run: |
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "TEST_URL=https://sudokuz.vercel.app" >> $GITHUB_ENV
+          else
+            echo "TEST_URL=https://sudokuz-staging.vercel.app" >> $GITHUB_ENV
+          fi
+
+      - name: Wait for deployment
+        run: |
+          echo "Waiting for deployment to be ready..."
+          for i in {1..30}; do
+            if curl -f $TEST_URL > /dev/null 2>&1; then
+              echo "Deployment is ready!"
+              break
+            fi
+            echo "Attempt $i/30: Deployment not ready, waiting..."
+            sleep 10
+          done
+
+      - name: Run smoke tests
+        run: |
+          npx playwright test --project=chromium --grep="should display mobile layout correctly"
+        env:
+          PLAYWRIGHT_TEST_BASE_URL: ${{ env.TEST_URL }}
+
+      - name: Run production health check
+        if: ${{ inputs.environment == 'production' }}
+        run: |
+          # Basic health checks
+          curl -f $TEST_URL || exit 1
+          curl -f $TEST_URL/_next/static/ || exit 1
+          
+          echo "✅ **Health Check Passed**" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL**: $TEST_URL" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: Healthy" >> $GITHUB_STEP_SUMMARY
