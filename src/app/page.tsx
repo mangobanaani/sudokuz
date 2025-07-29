@@ -5,8 +5,13 @@ import { SudokuGrid } from '@/components/SudokuGrid';
 import { GameControls } from '@/components/GameControls';
 import { MobileNumberPad } from '@/components/MobileNumberPad';
 import { motion } from 'framer-motion';
+import { useEffect } from 'react';
 
 export default function Home() {
+  useEffect(() => {
+    console.log('SudokuZ: Page component mounted');
+  }, []);
+
   return (
     <SudokuProvider>
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 flex flex-col p-4">
