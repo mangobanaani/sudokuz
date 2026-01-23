@@ -101,6 +101,18 @@ export function SudokuProvider({ children }: { children: React.ReactNode }) {
 
   const makeMove = useCallback((row: number, col: number, value: number | null) => {
     setGameState(prev => {
+      // Validate input bounds
+      if (row < 0 || row >= prev.gridConfig.size || col < 0 || col >= prev.gridConfig.size) {
+        console.warn(`Invalid cell position: row=${row}, col=${col}, gridSize=${prev.gridConfig.size}`);
+        return prev;
+      }
+
+      // Validate value is within valid range or null
+      if (value !== null && (value < 1 || value > prev.gridConfig.maxNumber)) {
+        console.warn(`Invalid cell value: ${value}, maxNumber=${prev.gridConfig.maxNumber}`);
+        return prev;
+      }
+
       // Don't allow moves on initial cells
       if (prev.initialGrid[row][col] !== null) return prev;
 

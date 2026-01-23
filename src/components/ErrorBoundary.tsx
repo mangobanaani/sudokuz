@@ -37,7 +37,7 @@ export class ErrorBoundary extends React.Component<
             <details className="text-sm text-gray-500">
               <summary className="cursor-pointer font-medium">Error details</summary>
               <pre className="mt-2 whitespace-pre-wrap">
-                {this.state.error?.toString()}
+                {this.state.error?.message || 'An unknown error occurred'}
               </pre>
             </details>
             <button

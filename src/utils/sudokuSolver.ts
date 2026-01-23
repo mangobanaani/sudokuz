@@ -146,8 +146,9 @@ export class SudokuSolver {
   }
 
   private static findFirstEmptyCell(grid: SudokuGrid): [number, number] | null {
-    for (let row = 0; row < 9; row++) {
-      for (let col = 0; col < 9; col++) {
+    const size = grid.length;
+    for (let row = 0; row < size; row++) {
+      for (let col = 0; col < size; col++) {
         if (grid[row][col] === null) return [row, col];
       }
     }

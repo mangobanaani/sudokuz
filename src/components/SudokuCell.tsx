@@ -70,18 +70,21 @@ const SudokuCell = memo(({
       let newRow = row;
       let newCol = col;
       
+      const gridSize = maxNumber;
+      const maxIndex = gridSize - 1;
+
       switch (key) {
         case 'ArrowUp':
           newRow = Math.max(0, row - 1);
           break;
         case 'ArrowDown':
-          newRow = Math.min(8, row + 1);
+          newRow = Math.min(maxIndex, row + 1);
           break;
         case 'ArrowLeft':
           newCol = Math.max(0, col - 1);
           break;
         case 'ArrowRight':
-          newCol = Math.min(8, col + 1);
+          newCol = Math.min(maxIndex, col + 1);
           break;
       }
       
